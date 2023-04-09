@@ -67,28 +67,24 @@ def get_ada_embedding(text):
     return openai.Embedding.create(input=[text], model="text-embedding-ada-002")["data"][0]["embedding"]
 
 def task_creation_agent(objective: str, result: Dict, task_description: str, task_list: List[str], gpt_version: str = 'gpt-3'):
-    required_keywords = {
-        "python": ["python"],
-        "javascript": ["javascript"],
-        "terminal": ["terminal"],
-        "research": ["research", "study"],
+    tool_description = {
+        "python": "Usefull when you need to create a python script",
+        "terminal": "Usefull when you need to execute a terminal command",
+        "research": "Usefull when you need to research something",
     }
-    keywords = []
-    for agent_type, agent_keywords in required_keywords.items():
-        keywords += agent_keywords
-    keyword_str = ", ".join(keywords)
+    tool_names = list(tool_description.keys())
+    tool_descriptions = map(lambda x: f"{x} {tool_description[x]}", tool_names)
     
-    prompt = f"You are an task creation AI that uses the result of an execution agent to create new tasks with the following objective: {objective}, The last completed task has the result: {result}. This result was based on this task description: {task_description}. These are incomplete tasks: {', '.join(task_list)}. Based on the result and using the keywords {keyword_str}, create new tasks to be completed by the AI system that do not overlap with incomplete tasks. Only use the keywords if nessesary. The keywords are there to help trigger certain functions, only use them if the task actually requires one of the keywords. Return the tasks as an array."
+    prompt = f"You are an task creation AI that uses the result of an execution agent to create new tasks with the following objective: {objective}, The last completed task has the result: {result}. This result was based on this task description: {task_description}. These are incomplete tasks: {', '.join(task_list)}. Based on the result and using the giiven tools {', '.join(tool_names)}: {'. '.join(tool_descriptions)}., create new tasks to be completed by the AI system that do not overlap with incomplete tasks. Only use tool if nessesary. The tool are there to help trigger certain functions, only use them if the task actually requires one of the tools. Return the tasks as an array."
     
     response = openai_call(prompt, USE_GPT4)
     new_tasks = response.split('\n')
     return [{"task_name": task_name} for task_name in new_tasks]
 
-def context_agent(query: str, index_name: str, n: int):
-    query_embedding = get_ada_embedding(query)
+def context_agent(query: str, n: int = 1):
     results = task_index.similarity_search_with_score(query, k=n)
     sorted_results = sorted(results, key=lambda x: x[1], reverse=True)
-    return [item[0].metadata["task"] for item in sorted_results]
+    return ". ".join([item[0].metadata["task"] for item in sorted_results])
 
 # Add the first task
 first_task = {
@@ -99,7 +95,8 @@ first_task = {
 def main_agent(task: Dict):
     task_name = task["task_name"].lower()
     agent_key = None
-    shared_context = get_shared_context(task_name)
+    task_context = context_agent(task_name, 3)
+    # shared_context = get_shared_context(task_name)
 
     if "python" in task_name:
         agent_key = "PythonDeveloper"
@@ -121,12 +118,12 @@ def main_agent(task: Dict):
         agent = agents[agent_key]
     else:
         if agent_key not in agents:
-            prompt = prompt_generator(task, shared_context=shared_context)
+            prompt = prompt_generator(task, shared_context=task_context)
             agents[agent_key] = create_custom_agent(agent_key, "Custom", prompt=prompt)
         agent = agents[agent_key]
 
     # Agents share information through a shared context or a messaging system
-    result = agent(task, shared_context)
+    result = agent(task, task_context)
 
     # Check if there are new agents to be created
     new_agents = create_new_agents(result)
