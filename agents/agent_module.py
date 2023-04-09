@@ -50,7 +50,7 @@ def create_python_developer_agent():
         if is_valid_python_script(response):
             script = response.split('--PYTHON SCRIPT--', 1)[1]
             save_script_to_file(
-                script, f"task_{task_id}_{task_name.replace(' ', '_')}.py")
+                script, f"task_{task_id}.py")
             return "Python task completed: " + task_name
         else:
             return "The generated result does not contain a valid Python script."
@@ -71,7 +71,7 @@ def create_javascript_developer_agent():
         if is_valid_javascript_script(response):
             script = response.split('--JAVASCRIPT SCRIPT--', 1)[1]
             save_script_to_file(
-                script, f"task_{task_id}_{task_name.replace(' ', '_')}.js")
+                script, f"task_{task_id}.js")
             return "JavaScript task completed: " + task_name
         else:
             return "The generated result does not contain a valid JavaScript script."
@@ -91,7 +91,7 @@ def create_css_developer_agent():
         if is_valid_css_script(response):
             script = response.split('--CSS SCRIPT--', 1)[1]
             save_script_to_file(
-                script, f"task_{task_id}_{task_name.replace(' ', '_')}.css")
+                script, f"task_{task_id}.css")
             return "CSS task completed: " + task_name
         else:
             return "The generated result does not contain a valid CSS script."
@@ -109,7 +109,7 @@ def create_researcher_agent():
         response = openai_call(prompt, USE_GPT4, 0.7, 2000)
         if response:
             save_script_to_file(
-                response, f"task_{task_id}_{task_name.replace(' ', '_')}.txt")
+                response, f"task_{task_id}.txt")
             return "Research task completed: " + task_name
         else:
             return "No research paper generated."

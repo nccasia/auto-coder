@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import os
 import openai
-import pinecone
+from langchain.vectorstores import FAISS
+from langchain.embeddings.openai import OpenAIEmbeddings
 import time
 import sys
 from collections import deque
@@ -25,12 +26,6 @@ USE_GPT4 = False
 if USE_GPT4:
     print("\033[91m\033[1m"+"\n*****USING GPT-4. POTENTIALLY EXPENSIVE. MONITOR YOUR COSTS*****"+"\033[0m\033[0m")
 
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
-assert PINECONE_API_KEY, "PINECONE_API_KEY environment variable is missing from .env"
-
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "us-east1-gcp")
-assert PINECONE_ENVIRONMENT, "PINECONE_ENVIRONMENT environment variable is missing from .env"
-
 # Table config
 YOUR_TABLE_NAME = os.getenv("TABLE_NAME", "")
 assert YOUR_TABLE_NAME, "TABLE_NAME environment variable is missing from .env"
@@ -51,29 +46,15 @@ assert YOUR_FIRST_TASK, "FIRST_TASK environment variable is missing from .env"
 print("\033[96m\033[1m"+"\n*****OBJECTIVE*****\n"+"\033[0m\033[0m")
 print(OBJECTIVE)
 
-# Configure OpenAI and Pinecone
+# Configure OpenAI and 
 openai.api_key = OPENAI_API_KEY
-pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
 
-# Create Pinecone index
-table_name = YOUR_TABLE_NAME
-dimension = 1536
-metric = "cosine"
-pod_type = "p1"
+# Create index
+# Create FAISS index
+embeddings_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+task_index = FAISS.from_texts(["_"], embeddings_model, metadatas=[{"task":YOUR_FIRST_TASK}])
+context_index = FAISS.from_texts(["_"], embeddings_model, metadatas=[{"task":YOUR_SHARED_CONTEXT}])
 
-if table_name not in pinecone.list_indexes():
-    pinecone.create_index(table_name, dimension=dimension, metric=metric, pod_type=pod_type)
-
-# Connect to the index
-index = pinecone.Index(table_name)
-
-# Create Pinecone shared context
-shared_context_table_name = YOUR_SHARED_CONTEXT
-if shared_context_table_name not in pinecone.list_indexes():
-    pinecone.create_index(shared_context_table_name, dimension=dimension, metric=metric, pod_type=pod_type)
-
-# Connect to the shared context index
-shared_context_index = pinecone.Index(shared_context_table_name)
 
 # Task list
 task_list = deque([])
@@ -105,10 +86,9 @@ def task_creation_agent(objective: str, result: Dict, task_description: str, tas
 
 def context_agent(query: str, index_name: str, n: int):
     query_embedding = get_ada_embedding(query)
-    results = index.query(query_embedding, top_k=n,
-    include_metadata=True)
-    sorted_results = sorted(results.matches, key=lambda x: x.score, reverse=True)    
-    return [(str(item.metadata['task'])) for item in sorted_results]
+    results = task_index.similarity_search_with_score(query, k=n)
+    sorted_results = sorted(results, key=lambda x: x[1], reverse=True)
+    return [item[0].metadata["task"] for item in sorted_results]
 
 # Add the first task
 first_task = {
@@ -141,7 +121,7 @@ def main_agent(task: Dict):
         agent = agents[agent_key]
     else:
         if agent_key not in agents:
-            prompt = prompt_generator(task_name, shared_context=shared_context)
+            prompt = prompt_generator(task, shared_context=shared_context)
             agents[agent_key] = create_custom_agent(agent_key, "Custom", prompt=prompt)
         agent = agents[agent_key]
 
@@ -152,17 +132,16 @@ def main_agent(task: Dict):
     new_agents = create_new_agents(result)
     for new_agent in new_agents:
         if new_agent['name'] not in agents:
-            agents[new_agent['name']] = create_custom_agent(new_agent['name'], new_agent['role'])
+            agents[new_agent['name']] = create_custom_agent(new_agent['name'], new_agent['role'], prompt=new_agent['prompt'])
 
     return result
 
 # Example function to get shared context
 def get_shared_context(context_key: str):
-    query_embedding = get_ada_embedding(context_key)
-    results = shared_context_index.query(query_embedding, top_k=1, include_metadata=True)
+    results = context_index.similarity_search_with_score(context_key, k=1)
 
-    if results.matches:
-        return results.matches[0].metadata["value"]
+    if len(results) > 0:
+        return results[0]
     else:
         return None 
     
@@ -187,16 +166,16 @@ while True:
         result = main_agent(task)
 
         # process_response(result, task)
-
         this_task_id = int(task["task_id"])
         print("\033[93m\033[1m"+"\n*****TASK RESULT*****\n"+"\033[0m\033[0m")
         print(result)
 
         # Step 2: Enrich result and store in Pinecone
-        enriched_result = {'data': result}  # This is where you should enrich the result if needed
+        enriched_result = {'data': result}  
+        # This is where you should enrich the result if needed
         result_id = f"result_{task['task_id']}"
         vector = enriched_result['data']  # extract the actual result from the dictionary
-        index.upsert([(result_id, get_ada_embedding(vector),{"task":task['task_name'],"result":result})])
+        task_index.add_texts([result], metadatas=[{"task":task["task_name"]}])
 
         # Step 3: Create new tasks and reprioritize task list
         new_tasks = task_creation_agent(OBJECTIVE, enriched_result, task["task_name"], [t["task_name"] for t in task_list])

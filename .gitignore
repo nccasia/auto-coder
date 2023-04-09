@@ -1,1 +1,4 @@
 .env
+generated_scripts/
+**/*/__pycache__/
+**/*.pyc
